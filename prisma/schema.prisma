@@ -1,0 +1,442 @@
+// Luma clone data model — spec §7
+// SQLite for local dev; swap `provider` to postgresql for prod.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---- Identity ----------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  phone         String?
+  name          String?
+  avatarUrl     String?
+  bio           String?
+  timezone      String   @default("America/New_York")
+  locale        String   @default("en")
+  createdAt     DateTime @default(now())
+  suspendedAt   DateTime?
+
+  sessions      Session[]
+  loginCodes    LoginCode[]
+  ownedCalendars CalendarMember[]
+  hostOf        EventHost[]
+  guestOf       Guest[]
+  blasts        Blast[]
+  reportsMade   Report[]  @relation("ReportsMade")
+  auditLogs     AuditLog[]
+  chatMessages  ChatMessage[]
+  blocksMade    Block[]   @relation("Blocker")
+  blocksAgainst Block[]   @relation("Blocked")
+  subscriptions Subscription[]
+}
+
+model LoginCode {
+  id        String   @id @default(cuid())
+  userId    String
+  code      String   // 6-digit, hashed in a real build; stored plain in dev
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, expiresAt])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+// ---- Calendars ---------------------------------------------------------
+
+model Calendar {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  name          String
+  description   String?
+  timezone      String   @default("America/New_York")
+  logoUrl       String?
+  coverUrl      String?
+  themeColor    String   @default("#ef4444")
+  customDomain  String?
+  metaPixelId   String?
+  ga4Id         String?
+  isVerified    Boolean  @default(false)
+  isSuspended   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  members       CalendarMember[]
+  events        Event[]
+  subscribers   Subscription[]
+  apiKeys       ApiKey[]
+  coupons       Coupon[]
+  eventTags     EventTag[]
+  personTags    PersonTag[]
+  webhooks      WebhookEndpoint[]
+  blasts        Blast[]
+  people        Person[]
+}
+
+model CalendarMember {
+  id          String   @id @default(cuid())
+  calendarId  String
+  userId      String
+  role        String   // owner | admin | manager | checkin | billing
+  createdAt   DateTime @default(now())
+  calendar    Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([calendarId, userId])
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  calendarId  String
+  userId      String
+  createdAt   DateTime @default(now())
+  calendar    Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([calendarId, userId])
+}
+
+// ---- Events ------------------------------------------------------------
+
+model Event {
+  id                        String   @id @default(cuid())
+  calendarId                String
+  slug                      String   @unique
+  shortCode                 String   @unique // the lu.ma/{code}
+  title                     String
+  descriptionRich           String?
+  coverUrl                  String?
+  startsAt                  DateTime
+  endsAt                    DateTime
+  timezone                  String
+  locationType              String   // physical | virtual | hybrid
+  address                   String?
+  lat                       Float?
+  lon                       Float?
+  hideLocationUntilApproved Boolean  @default(false)
+  virtualProvider           String?  // zoom | meet | custom | luma
+  virtualUrl                String?
+  capacity                  Int?
+  visibility                String   @default("public") // public | unlisted | private
+  status                    String   @default("published") // draft | published | cancelled
+  approvalRequired          Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  calendar      Calendar       @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  sessions      EventSession[]
+  hosts         EventHost[]
+  ticketTypes   TicketType[]
+  orders        TicketOrder[]
+  tickets       Ticket[]
+  guests        Guest[]
+  questions     RegistrationQuestion[]
+  coupons       Coupon[]
+  tags          EventTagAssignment[]
+  blasts        Blast[]
+
+  @@index([calendarId, startsAt])
+}
+
+model EventSession {
+  id        String   @id @default(cuid())
+  eventId   String
+  title     String
+  startsAt  DateTime
+  endsAt    DateTime
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+model EventHost {
+  id         String   @id @default(cuid())
+  eventId    String
+  userId     String
+  role       String   @default("host") // host | co-host | manager
+  displayOrder Int    @default(0)
+  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([eventId, userId])
+}
+
+// ---- Tickets -----------------------------------------------------------
+
+model TicketType {
+  id              String   @id @default(cuid())
+  eventId         String
+  name            String
+  description     String?
+  priceCents      Int      @default(0)
+  currency        String   @default("USD")
+  inventory       Int?
+  salesStart      DateTime?
+  salesEnd        DateTime?
+  perPersonLimit  Int?
+  accessLevel     String   @default("public") // public | secret
+  isTransferable  Boolean  @default(true)
+  secretUnlockCode String?
+  event           Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  tickets         Ticket[]
+}
+
+model TicketOrder {
+  id           String   @id @default(cuid())
+  eventId      String
+  buyerUserId  String?
+  totalCents   Int      @default(0)
+  currency     String   @default("USD")
+  stripePiId   String?  @unique
+  status       String   @default("paid") // pending | paid | refunded | failed
+  createdAt    DateTime @default(now())
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  tickets      Ticket[]
+}
+
+model Ticket {
+  id             String   @id @default(cuid())
+  orderId        String
+  eventId        String
+  ticketTypeId   String
+  guestId        String?  @unique
+  qrToken        String   @unique
+  status         String   @default("valid") // valid | void | refunded
+  order          TicketOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  event          Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType     TicketType @relation(fields: [ticketTypeId], references: [id])
+  guest          Guest?   @relation(fields: [guestId], references: [id])
+}
+
+// ---- Registration ------------------------------------------------------
+
+model Guest {
+  id             String   @id @default(cuid())
+  eventId        String
+  userId         String?  // null for imported-contact guests
+  displayName    String
+  email          String
+  status         String   @default("registered") // pending | registered | approved | declined | waitlisted | checked_in | cancelled
+  registeredAt   DateTime @default(now())
+  checkedInAt    DateTime?
+  referrerUserId String?
+  event          Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  ticket         Ticket?
+  answers        RegistrationAnswer[]
+  @@unique([eventId, email])
+  @@index([eventId, status])
+}
+
+model RegistrationQuestion {
+  id          String   @id @default(cuid())
+  eventId     String
+  type        String   // short_text | long_text | single | multi | date | email | phone | url | file | consent
+  label       String
+  required    Boolean  @default(false)
+  optionsJson String?  // JSON-encoded options for choice-type
+  order       Int      @default(0)
+  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  answers     RegistrationAnswer[]
+}
+
+model RegistrationAnswer {
+  id         String   @id @default(cuid())
+  guestId    String
+  questionId String
+  value      String   // JSON-encoded scalar or array
+  guest      Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  question   RegistrationQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  @@unique([guestId, questionId])
+}
+
+// ---- Coupons, tags, people, blasts, chat, reports, audit --------------
+
+model Coupon {
+  id          String   @id @default(cuid())
+  calendarId  String?
+  eventId     String?
+  code        String
+  kind        String   // fixed | percent
+  amount      Int      // cents or percentage points
+  quantity    Int?
+  redeemed    Int      @default(0)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  calendar    Calendar? @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  event       Event?    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  @@unique([calendarId, code])
+}
+
+model EventTag {
+  id          String   @id @default(cuid())
+  calendarId  String
+  name        String
+  calendar    Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  assignments EventTagAssignment[]
+  @@unique([calendarId, name])
+}
+
+model EventTagAssignment {
+  id      String @id @default(cuid())
+  eventId String
+  tagId   String
+  event   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  tag     EventTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  @@unique([eventId, tagId])
+}
+
+model PersonTag {
+  id          String @id @default(cuid())
+  calendarId  String
+  name        String
+  calendar    Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  assignments PersonTagAssignment[]
+  @@unique([calendarId, name])
+}
+
+model Person {
+  id         String @id @default(cuid())
+  calendarId String
+  email      String
+  name       String?
+  phone      String?
+  calendar   Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  tags       PersonTagAssignment[]
+  @@unique([calendarId, email])
+}
+
+model PersonTagAssignment {
+  id        String @id @default(cuid())
+  personId  String
+  tagId     String
+  person    Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  tag       PersonTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  @@unique([personId, tagId])
+}
+
+model Blast {
+  id          String   @id @default(cuid())
+  eventId     String?
+  calendarId  String?
+  senderId    String
+  subject     String
+  body        String
+  segment     String   @default("registered")
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  stats       String?  // JSON
+  createdAt   DateTime @default(now())
+  event       Event?    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  calendar    Calendar? @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  sender      User      @relation(fields: [senderId], references: [id])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  scopeType String   // event | host-dm
+  scopeId   String
+  senderId  String
+  body      String
+  parentId  String?
+  createdAt DateTime @default(now())
+  sender    User     @relation(fields: [senderId], references: [id])
+  @@index([scopeType, scopeId, createdAt])
+}
+
+model Block {
+  id         String @id @default(cuid())
+  blockerId  String
+  blockedId  String
+  createdAt  DateTime @default(now())
+  blocker    User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked    User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  @@unique([blockerId, blockedId])
+}
+
+model Report {
+  id         String @id @default(cuid())
+  reporterId String
+  targetType String  // user | event | calendar | message
+  targetId   String
+  reason     String
+  notes      String?
+  status     String  @default("open") // open | reviewing | actioned | dismissed
+  createdAt  DateTime @default(now())
+  reporter   User @relation("ReportsMade", fields: [reporterId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String @id @default(cuid())
+  staffId    String?
+  action     String
+  targetType String
+  targetId   String
+  payload    String?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  staff      User? @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  @@index([createdAt])
+}
+
+// ---- Platform ---------------------------------------------------------
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  calendarId  String?
+  scope       String   // calendar | org | oauth
+  label       String?
+  lastFour    String
+  keyHash     String   @unique
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+  revokedAt   DateTime?
+  calendar    Calendar? @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+}
+
+model WebhookEndpoint {
+  id          String   @id @default(cuid())
+  calendarId  String
+  url         String
+  secret      String
+  events      String   // comma-separated list of subscribed events
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  calendar    Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  deliveries  WebhookDelivery[]
+}
+
+model WebhookDelivery {
+  id          String   @id @default(cuid())
+  endpointId  String
+  event       String
+  payload     String
+  statusCode  Int?
+  attempts    Int      @default(0)
+  nextRetryAt DateTime?
+  deliveredAt DateTime?
+  createdAt   DateTime @default(now())
+  endpoint    WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  @@index([nextRetryAt])
+}
+
+model FeatureFlag {
+  key       String @id
+  rules     String // JSON
+  updatedAt DateTime @updatedAt
+}
