@@ -22,6 +22,8 @@ type Props = {
   capacity: number | null;
   status: string;
   userEmail: string | null;
+  referralCode: string | null;
+  ref: string | null;
   questions: Question[];
 };
 
@@ -41,7 +43,7 @@ export function RsvpPanel(p: Props) {
     const res = await fetch(`/api/events/${p.eventId}/rsvp`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, name, answers }),
+      body: JSON.stringify({ email, name, answers, ref: p.ref ?? undefined }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -66,6 +68,7 @@ export function RsvpPanel(p: Props) {
           <p className="text-ink-300 text-sm">
             Check your email for a confirmation and calendar invite.
           </p>
+          {p.referralCode && <ReferralShare slug={p.slug} code={p.referralCode} />}
           <Link href="/home" className="btn-ghost w-full">Your tickets</Link>
         </div>
       ) : full ? (
@@ -139,6 +142,28 @@ export function RsvpPanel(p: Props) {
           {err && <div className="text-sm text-red-400">{err}</div>}
         </form>
       )}
+    </div>
+  );
+}
+
+function ReferralShare({ slug, code }: { slug: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const link = `${origin}/event/${slug}?ref=${code}`;
+  async function copy() {
+    await navigator.clipboard.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+  return (
+    <div className="mt-2 p-3 rounded-md bg-ink-800 space-y-2">
+      <div className="text-xs text-ink-400">Invite friends — your referral link:</div>
+      <div className="flex gap-2">
+        <input className="input flex-1 text-xs" value={link} readOnly />
+        <button type="button" className="btn-ghost text-xs" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
     </div>
   );
 }

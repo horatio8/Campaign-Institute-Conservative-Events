@@ -137,6 +137,7 @@ model Event {
   visibility                String   @default("public") // public | unlisted | private
   status                    String   @default("published") // draft | published | cancelled
   approvalRequired          Boolean  @default(false)
+  featuredUntil             DateTime?
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
@@ -234,12 +235,14 @@ model Guest {
   registeredAt   DateTime @default(now())
   checkedInAt    DateTime?
   referrerUserId String?
+  referralCode   String?  @unique
   event          Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
   user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   ticket         Ticket?
   answers        RegistrationAnswer[]
   @@unique([eventId, email])
   @@index([eventId, status])
+  @@index([eventId, referrerUserId])
 }
 
 model RegistrationQuestion {

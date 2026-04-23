@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { prisma } from "./db";
 import { randomToken, sixDigitCode } from "./ids";
 import { sendEmail } from "./email";
+import { signinCode } from "./emailTemplates";
 
 const SESSION_COOKIE = "luma_session";
 const SESSION_TTL_DAYS = 30;
@@ -21,11 +22,7 @@ export async function startLogin(email: string) {
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     },
   });
-  await sendEmail({
-    to: normalized,
-    subject: `${code} is your Luma sign-in code`,
-    text: `Your sign-in code is ${code}. It expires in 15 minutes.`,
-  });
+  await sendEmail(signinCode({ to: normalized, code }));
   return { userId: user.id };
 }
 

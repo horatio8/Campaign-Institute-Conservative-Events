@@ -4,13 +4,19 @@ import { prisma } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
 import { formatInTimeZone } from "date-fns-tz";
 import { RsvpPanel } from "./RsvpPanel";
+import { Chat } from "./Chat";
 
 export const dynamic = "force-dynamic";
 
 export default async function EventPage({
   params,
-}: { params: Promise<{ slug: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ ref?: string }>;
+}) {
   const { slug } = await params;
+  const { ref } = await searchParams;
   const user = await getSessionUser();
   const event = await prisma.event.findUnique({
     where: { slug },
@@ -89,6 +95,13 @@ export default async function EventPage({
             {event.descriptionRich}
           </article>
         )}
+
+        {user && (existingGuest || event.hosts.some((h) => h.userId === user.id)) && (
+          <section>
+            <h2 className="text-lg font-semibold mb-3">Event chat</h2>
+            <Chat eventId={event.id} currentUserId={user.id} />
+          </section>
+        )}
       </div>
 
       <aside className="space-y-4">
@@ -102,6 +115,8 @@ export default async function EventPage({
           capacity={event.capacity}
           status={event.status}
           userEmail={user?.email ?? null}
+          referralCode={existingGuest?.referralCode ?? null}
+          ref={ref ?? null}
           questions={event.questions.map((q) => ({
             id: q.id,
             type: q.type,

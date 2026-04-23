@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth";
 import { formatInTimeZone } from "date-fns-tz";
 import { GuestTable } from "./GuestTable";
 import { BlastForm } from "./BlastForm";
+import { TagsAndIO } from "./TagsAndIO";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export default async function ManagePage({
       hosts: true,
       ticketTypes: true,
       guests: { orderBy: { registeredAt: "desc" } },
+      tags: { include: { tag: true } },
       _count: { select: { guests: true } },
     },
   });
@@ -37,6 +39,25 @@ export default async function ManagePage({
   });
   const counts = Object.fromEntries(
     statusCounts.map((r) => [r.status, r._count._all])
+  );
+
+  const topReferrerRows = await prisma.guest.groupBy({
+    by: ["referrerUserId"],
+    where: { eventId: event.id, referrerUserId: { not: null } },
+    _count: { _all: true },
+    orderBy: { _count: { referrerUserId: "desc" } },
+    take: 5,
+  });
+  const referrers = await Promise.all(
+    topReferrerRows.map(async (row) => {
+      const u = row.referrerUserId
+        ? await prisma.user.findUnique({ where: { id: row.referrerUserId } })
+        : null;
+      return {
+        name: u?.name ?? u?.email ?? "Unknown",
+        count: row._count._all,
+      };
+    })
   );
 
   return (
@@ -69,10 +90,30 @@ export default async function ManagePage({
         ))}
       </section>
 
+      <TagsAndIO
+        eventId={event.id}
+        calendarId={event.calendarId}
+        initialTags={event.tags.map((a) => ({ id: a.tag.id, name: a.tag.name }))}
+      />
+
       <section>
         <h2 className="text-lg font-semibold mb-3">Guests ({event._count.guests})</h2>
         <GuestTable eventId={event.id} guests={event.guests} />
       </section>
+
+      {referrers.length > 0 && (
+        <section>
+          <h2 className="text-lg font-semibold mb-3">Top referrers</h2>
+          <ul className="panel rounded-lg divide-y divide-ink-700 max-w-md">
+            {referrers.map((r) => (
+              <li key={r.name} className="p-3 flex justify-between text-sm">
+                <span>{r.name}</span>
+                <span className="text-brand">{r.count} invite{r.count === 1 ? "" : "s"}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section>
         <h2 className="text-lg font-semibold mb-3">Send a blast</h2>

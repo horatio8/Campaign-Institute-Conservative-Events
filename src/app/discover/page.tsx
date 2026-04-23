@@ -11,8 +11,8 @@ const CATEGORIES = [
 
 export default async function DiscoverPage({
   searchParams,
-}: { searchParams: Promise<{ q?: string; city?: string }> }) {
-  const { q, city } = await searchParams;
+}: { searchParams: Promise<{ q?: string; city?: string; tag?: string }> }) {
+  const { q, city, tag } = await searchParams;
 
   const events = await prisma.event.findMany({
     where: {
@@ -23,9 +23,23 @@ export default async function DiscoverPage({
         ? { OR: [{ title: { contains: q } }, { descriptionRich: { contains: q } }] }
         : {}),
       ...(city ? { address: { contains: city } } : {}),
+      ...(tag ? { tags: { some: { tag: { name: tag } } } } : {}),
     },
     orderBy: { startsAt: "asc" },
     take: 48,
+    include: { calendar: true, _count: { select: { guests: true } } },
+  });
+
+  const now = new Date();
+  const featured = await prisma.event.findMany({
+    where: {
+      status: "published",
+      visibility: "public",
+      startsAt: { gte: now },
+      featuredUntil: { gt: now },
+    },
+    orderBy: { startsAt: "asc" },
+    take: 6,
     include: { calendar: true, _count: { select: { guests: true } } },
   });
 
@@ -67,6 +81,24 @@ export default async function DiscoverPage({
           </Link>
         ))}
       </div>
+
+      {featured.length > 0 && (
+        <section>
+          <h2 className="text-lg font-semibold mb-3">Featured events</h2>
+          <div className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+            {featured.map((e) => (
+              <EventCard key={e.id} event={e} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {tag && (
+        <div className="text-sm text-ink-300">
+          Filtering by tag: <span className="text-brand">#{tag}</span>{" "}
+          <Link href="/discover" className="text-ink-400 hover:underline">clear</Link>
+        </div>
+      )}
 
       <section>
         <h2 className="text-lg font-semibold mb-3">Featured calendars</h2>

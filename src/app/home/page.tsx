@@ -20,7 +20,7 @@ export default async function MyHomePage() {
   const attending = await prisma.guest.findMany({
     where: { userId: user.id, status: { in: ["registered", "approved", "checked_in"] } },
     orderBy: { event: { startsAt: "asc" } },
-    include: { event: { include: { calendar: true } } },
+    include: { event: { include: { calendar: true } }, ticket: true },
   });
 
   const calendars = await prisma.calendar.findMany({
@@ -85,17 +85,27 @@ export default async function MyHomePage() {
           <ul className="panel divide-y divide-ink-700 rounded-lg">
             {attending.map((g) => (
               <li key={g.id} className="p-4 flex items-center justify-between gap-3">
-                <div>
-                  <Link href={`/event/${g.event.slug}`} className="font-medium hover:text-brand">
+                <div className="min-w-0">
+                  <Link href={`/event/${g.event.slug}`} className="font-medium hover:text-brand truncate block">
                     {g.event.title}
                   </Link>
                   <div className="text-xs text-ink-400">
                     {formatInTimeZone(g.event.startsAt, g.event.timezone, "EEE, LLL d · h:mm a zzz")}
                   </div>
                 </div>
-                <span className="text-xs px-2 py-1 rounded bg-ink-800 text-ink-200 capitalize">
-                  {g.status.replace("_", " ")}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-2 py-1 rounded bg-ink-800 text-ink-200 capitalize">
+                    {g.status.replace("_", " ")}
+                  </span>
+                  {g.ticket && (
+                    <Link
+                      href={`/ticket/${g.ticket.qrToken}`}
+                      className="btn-ghost text-xs"
+                    >
+                      Show ticket
+                    </Link>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

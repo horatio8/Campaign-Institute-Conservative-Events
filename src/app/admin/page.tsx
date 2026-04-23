@@ -1,54 +1,55 @@
-import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
-import { redirect } from "next/navigation";
 import Link from "next/link";
+import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-// This is a stub of the internal admin portal described in spec §4.
-// In production this sits on a separate auth boundary with SSO-only sign-in.
-// For this scaffold we gate it with ADMIN_EMAIL env var.
 export default async function AdminPage() {
-  const user = await getSessionUser();
-  const allowlist = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim());
-  if (!user || !allowlist.includes(user.email)) {
-    redirect("/");
-  }
-
-  const [users, events, calendars, reports, orders] = await Promise.all([
+  const [users, events, calendars, reports, orders, pendingWebhooks, featured] = await Promise.all([
     prisma.user.count(),
     prisma.event.count(),
     prisma.calendar.count(),
-    prisma.report.findMany({
-      where: { status: "open" },
-      orderBy: { createdAt: "desc" },
-      take: 20,
-    }),
+    prisma.report.count({ where: { status: "open" } }),
     prisma.ticketOrder.count(),
+    prisma.webhookDelivery.count({ where: { deliveredAt: null } }),
+    prisma.event.count({ where: { featuredUntil: { gt: new Date() } } }),
   ]);
+
+  const recentReports = await prisma.report.findMany({
+    where: { status: "open" },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    include: { reporter: true },
+  });
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Admin</h1>
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <Stat label="Users" n={users} />
-        <Stat label="Calendars" n={calendars} />
-        <Stat label="Events" n={events} />
+      <h1 className="text-2xl font-semibold">Admin overview</h1>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Stat label="Users" n={users} href="/admin/users" />
+        <Stat label="Calendars" n={calendars} href="/admin/calendars" />
+        <Stat label="Events" n={events} href="/admin/events" />
         <Stat label="Orders" n={orders} />
-        <Stat label="Open reports" n={reports.length} />
+        <Stat label="Open reports" n={reports} href="/admin/reports" accent />
+        <Stat label="Featured events" n={featured} href="/admin/events?filter=featured" />
+        <Stat label="Pending webhooks" n={pendingWebhooks} href="/admin/webhooks" />
       </div>
 
-      <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Open reports</h2>
-        {reports.length === 0 ? (
+      <section>
+        <h2 className="text-lg font-semibold mb-2">Latest open reports</h2>
+        {recentReports.length === 0 ? (
           <p className="text-ink-400 text-sm">Queue empty.</p>
         ) : (
           <ul className="panel rounded-lg divide-y divide-ink-700">
-            {reports.map((r) => (
-              <li key={r.id} className="p-3 text-sm flex items-center justify-between">
+            {recentReports.map((r) => (
+              <li key={r.id} className="p-3 flex items-center justify-between text-sm">
                 <div>
-                  <div>{r.reason} <span className="text-ink-400">({r.targetType})</span></div>
-                  <div className="text-xs text-ink-400">{new Date(r.createdAt).toLocaleString()}</div>
+                  <div>
+                    <span className="text-ink-400">{r.targetType}:</span>{" "}
+                    <span className="font-medium">{r.reason}</span>
+                  </div>
+                  <div className="text-xs text-ink-400">
+                    by {r.reporter.email} · {new Date(r.createdAt).toLocaleString()}
+                  </div>
                 </div>
                 <Link href={`/admin/reports/${r.id}`} className="link">Open</Link>
               </li>
@@ -56,22 +57,20 @@ export default async function AdminPage() {
           </ul>
         )}
       </section>
-
-      <section className="space-y-2 text-sm text-ink-400">
-        <h2 className="text-lg font-semibold text-ink-50">Queues</h2>
-        <p>Trust & safety, payments ops, support, growth curation, compliance, platform config,
-        feature flags, experiments — each surfaces as a route under <code>/admin/*</code> per
-        spec §4. Stubbed here; wire to real data in later sprints.</p>
-      </section>
     </div>
   );
 }
 
-function Stat({ label, n }: { label: string; n: number }) {
-  return (
-    <div className="panel rounded-lg p-4">
+function Stat({
+  label, n, href, accent,
+}: { label: string; n: number; href?: string; accent?: boolean }) {
+  const inner = (
+    <>
       <div className="text-xs text-ink-400">{label}</div>
-      <div className="text-2xl font-semibold">{n}</div>
-    </div>
+      <div className={`text-2xl font-semibold ${accent && n > 0 ? "text-brand" : ""}`}>{n}</div>
+    </>
   );
+  const base = "panel rounded-lg p-4 block";
+  if (href) return <Link href={href} className={`${base} hover:border-brand`}>{inner}</Link>;
+  return <div className={base}>{inner}</div>;
 }

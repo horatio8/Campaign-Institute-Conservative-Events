@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { shortCode, slugify } from "../src/lib/ids";
+import { shortCode, slugify, randomToken } from "../src/lib/ids";
 import { generateApiKey } from "../src/lib/apikey";
 
 const prisma = new PrismaClient();
@@ -98,7 +98,8 @@ async function main() {
     },
   ];
 
-  for (const e of events) {
+  const createdEvents: { id: string; slug: string }[] = [];
+  for (const [idx, e] of events.entries()) {
     const slug = `${slugify(e.title)}-${shortCode(4)}`;
     const ev = await prisma.event.create({
       data: {
@@ -115,27 +116,47 @@ async function main() {
         virtualUrl: e.virtualUrl ?? null,
         capacity: e.capacity ?? null,
         approvalRequired: e.approvalRequired ?? false,
+        featuredUntil: idx === 0 ? new Date(Date.now() + 14 * 86400_000) : null,
         hosts: { create: { userId: demo.id, role: "host" } },
         ticketTypes: { create: { name: "Standard", priceCents: 0 } },
       },
     });
-    // add a couple demo guests
-    await prisma.guest.createMany({
-      data: [
-        {
-          eventId: ev.id,
-          displayName: "Pat Kim",
-          email: `pat+${ev.id}@luma.local`,
-          status: "registered",
-        },
-        {
-          eventId: ev.id,
-          displayName: "Sam Rivera",
-          email: `sam+${ev.id}@luma.local`,
-          status: "registered",
-        },
-      ],
+    createdEvents.push({ id: ev.id, slug: ev.slug });
+
+    // Demo guests, plus a ticket (with qrToken) for one of them.
+    const pat = await prisma.guest.create({
+      data: {
+        eventId: ev.id,
+        displayName: "Pat Kim",
+        email: `pat+${ev.id}@luma.local`,
+        status: "registered",
+        referralCode: shortCode(8),
+      },
     });
+    await prisma.guest.create({
+      data: {
+        eventId: ev.id,
+        displayName: "Sam Rivera",
+        email: `sam+${ev.id}@luma.local`,
+        status: "registered",
+        referralCode: shortCode(8),
+      },
+    });
+    const ticketType = await prisma.ticketType.findFirst({ where: { eventId: ev.id } });
+    if (ticketType) {
+      const order = await prisma.ticketOrder.create({
+        data: { eventId: ev.id, totalCents: 0, status: "paid" },
+      });
+      await prisma.ticket.create({
+        data: {
+          orderId: order.id,
+          eventId: ev.id,
+          ticketTypeId: ticketType.id,
+          guestId: pat.id,
+          qrToken: randomToken(18),
+        },
+      });
+    }
   }
 
   const { raw, hash, lastFour } = generateApiKey();
@@ -148,6 +169,20 @@ async function main() {
       keyHash: hash,
     },
   });
+
+  // One sample report so the admin queue isn't empty.
+  if (createdEvents.length > 0) {
+    await prisma.report.create({
+      data: {
+        reporterId: ashley.id,
+        targetType: "event",
+        targetId: createdEvents[0].id,
+        reason: "spam",
+        notes: "Looks like a reseller.",
+      },
+    });
+  }
+
   console.log(`Seeded. Demo user: demo@luma.local`);
   console.log(`Demo API key (save it): ${raw}`);
 }

@@ -2,14 +2,20 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
-import { randomToken } from "@/lib/ids";
+import { randomToken, shortCode } from "@/lib/ids";
 import { sendEmail } from "@/lib/email";
+import {
+  pendingApproval,
+  registrationConfirmed,
+  waitlisted,
+} from "@/lib/emailTemplates";
 import { enqueueWebhook } from "@/lib/webhooks";
 
 const Body = z.object({
   email: z.string().email(),
   name: z.string().min(1),
   answers: z.record(z.string(), z.string()).optional(),
+  ref: z.string().optional(),
 });
 
 export async function POST(
@@ -61,6 +67,21 @@ export async function POST(
 
   const guestUserId = user?.email === email ? user.id : null;
 
+  let referrerUserId: string | undefined;
+  if (parsed.data.ref) {
+    const ref = await prisma.guest.findUnique({
+      where: { referralCode: parsed.data.ref },
+    });
+    if (ref && ref.eventId === event.id && ref.userId) {
+      referrerUserId = ref.userId;
+    }
+  }
+
+  let referralCode = shortCode(8);
+  while (await prisma.guest.findUnique({ where: { referralCode } })) {
+    referralCode = shortCode(8);
+  }
+
   const guest = await prisma.guest.create({
     data: {
       eventId: event.id,
@@ -68,6 +89,8 @@ export async function POST(
       displayName: parsed.data.name,
       email,
       status: finalStatus,
+      referrerUserId,
+      referralCode,
       answers: parsed.data.answers
         ? {
             create: Object.entries(parsed.data.answers).map(([qid, val]) => ({
@@ -100,16 +123,28 @@ export async function POST(
     });
   }
 
-  await sendEmail({
-    to: email,
-    subject:
-      finalStatus === "waitlisted"
-        ? `You're on the waitlist for ${event.title}`
-        : finalStatus === "pending"
-        ? `Registration request received: ${event.title}`
-        : `Registration confirmed for ${event.title}`,
-    text: `Hi ${parsed.data.name},\n\nThanks for registering. Status: ${finalStatus}.\n\nEvent: ${event.title}\nWhen: ${event.startsAt.toUTCString()}\nWhere: ${event.address ?? event.virtualUrl ?? "TBA"}\n\nSee you there!\n`,
-  });
+  const base = process.env.APP_URL ?? "http://localhost:3000";
+  const eventUrl = `${base}/event/${event.slug}`;
+  const where = event.locationType === "virtual"
+    ? "Virtual"
+    : event.address ?? event.virtualUrl ?? "TBA";
+
+  if (finalStatus === "waitlisted") {
+    await sendEmail(waitlisted({ to: email, eventTitle: event.title, eventUrl }));
+  } else if (finalStatus === "pending") {
+    await sendEmail(pendingApproval({ to: email, eventTitle: event.title, eventUrl }));
+  } else {
+    await sendEmail(
+      registrationConfirmed({
+        to: email,
+        name: parsed.data.name,
+        eventTitle: event.title,
+        eventUrl,
+        when: event.startsAt.toUTCString(),
+        where,
+      })
+    );
+  }
 
   await enqueueWebhook(event.calendarId, "guest.registered", {
     event_id: event.id,
@@ -117,5 +152,10 @@ export async function POST(
     status: finalStatus,
   });
 
-  return NextResponse.json({ ok: true, status: finalStatus, guestId: guest.id });
+  return NextResponse.json({
+    ok: true,
+    status: finalStatus,
+    guestId: guest.id,
+    referralCode: guest.referralCode,
+  });
 }
